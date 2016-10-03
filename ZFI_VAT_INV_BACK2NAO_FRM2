@@ -1,0 +1,690 @@
+*----------------------------------------------------------------------*
+* ULMART                                                               *
+*----------------------------------------------------------------------*
+* RESPONSIBLE : Шерстобитова М. КОРУСконсалтинг                        *
+* AUTHOR      : Пигулевский Д., Кедич В., Tимидея Групп                *
+* DATE        : Сентябрь 2016                                          *
+*----------------------------------------------------------------------*
+* TITLE       : ZFI_VAT_INV_BACK2NAO_FRM2                              *
+* DESCRIPTION : Программа печати и формуляр счета-фактуры на возврат   *
+*               товара в НАО                                           *
+*----------------------------------------------------------------------*
+* FUNCTIONAL AREA    : FI                                              *
+* TASK SPECIFICATION : VAT_026_v3.doc - Программа печати и формуляр    *
+*                      счета-фактуры на возврат товара в НАО           *
+*----------------------------------------------------------------------*
+FORM create_invoice.
+
+  CONSTANTS : lc_matnr(2) TYPE c     VALUE '4*'
+            , lc_lifnr(3) TYPE c     VALUE '60*'
+            , lc_mwskz(3) TYPE c     VALUE '41*'
+            , lc_kschl    TYPE kschl VALUE 'MWAS'
+            .
+
+  DEFINE _add_field.
+    if &1 is not initial and &2 is not initial.
+      &1 = &1 && ','  && ` ` && &2.
+    endif.
+  END-OF-DEFINITION.
+
+  TYPES : BEGIN OF lty_s_invoice
+        , belnr      TYPE bkpf-belnr
+        , bldat      TYPE bkpf-bldat
+        , waers      TYPE bkpf-waers
+        , matnr      TYPE bseg-matnr
+        , lifnr      TYPE bseg-lifnr
+        , land1      TYPE lfa1-land1
+        , mwskz      TYPE bseg-mwskz
+        , name1      TYPE adrc-name1
+        , post_code1 TYPE adrc-post_code1
+        , city1      TYPE adrc-city1
+        , street     TYPE adrc-street
+        , s_inn      TYPE paval
+        , s_kpp      TYPE paval
+        , r_name1    TYPE lfa1-name1
+        , r_name2    TYPE lfa1-name2
+        , ort01      TYPE lfa1-ort01
+        , pstlz      TYPE lfa1-pstlz
+        , stras      TYPE lfa1-stras
+        , stcd1      TYPE lfa1-stcd1
+        , stcd3      TYPE lfa1-stcd3
+        , manager    TYPE paval
+        , accountant TYPE paval
+        , landx      TYPE landx
+        , kbetr      TYPE kbetr
+        , END OF lty_s_invoice
+        , lty_t_invoice TYPE TABLE OF lty_s_invoice
+
+        , BEGIN OF lty_s_product
+        , belnr TYPE belnr
+        , buzei TYPE buzei
+        , zz_fullname_txt TYPE mara-zz_fullname_txt "11 Наименование товара
+        , mseh3 TYPE mseh3       "12 Код ОКЕИ
+        , meins TYPE meins       "13 ЕИ
+        , menge TYPE menge_d     "14 Количество товара
+        , price TYPE dmbtr       "15 Цена за единицу товара 16/14
+        , dmbtr TYPE dmbtr       "16 Cтоимость товаров
+        , kbetr TYPE kbetr       "18 Cтавка налога
+        , wmwst TYPE wmwst       "19 Cумма налога
+        , swtax TYPE dmbtr       "20 Cтоимость товаров с налогом  16+19
+        , intcn3 TYPE intcn3     "21 Код страны
+        , landx TYPE landx       "22 Страна происхождения
+        , sgtxt TYPE sgtxt       "23 Номер ГТД
+        , END OF lty_s_product
+        , lty_t_product TYPE TABLE OF lty_s_product
+
+        , BEGIN OF lty_s_mara
+        , matnr TYPE matnr
+        , landx TYPE landx
+        , zz_fullname_txt TYPE mara-zz_fullname_txt
+        , intcn3 TYPE intcn3
+        , END OF lty_s_mara
+        , lty_t_mara TYPE SORTED TABLE OF lty_s_mara WITH UNIQUE KEY matnr
+
+        , BEGIN OF lty_s_taxrate
+        , aland TYPE land1_gp
+        , mwskz TYPE bseg-mwskz
+        , kbetr TYPE t007v-kbetr
+        , END OF lty_s_taxrate
+        , lty_t_taxrate TYPE SORTED TABLE OF lty_s_taxrate WITH NON-UNIQUE KEY aland mwskz
+
+        , BEGIN OF lty_s_t006a
+        , msehi TYPE msehi
+        , mseh3 TYPE mseh6
+        , END OF lty_s_t006a
+        , lty_t_t006a TYPE SORTED TABLE OF lty_s_t006a WITH UNIQUE KEY msehi
+        .
+
+  FIELD-SYMBOLS : <wa_bkpf> TYPE bkpf
+                , <wa_invoice> TYPE lty_s_invoice
+                , <wa_bseg> TYPE bseg
+                , <wa_product> TYPE lty_s_product
+                .
+
+  DATA : wa_data TYPE zsalv_vat_inv_back2nao
+       , lt_invoice TYPE lty_t_invoice
+       , wa_invoice TYPE lty_s_invoice
+       , lt_bseg TYPE bseg_t
+       , lt_bkpf TYPE fagl_t_bkpf
+       , lt_belnr TYPE rng_belnr_tt
+       , ls_belnr TYPE rng_belnr
+       , lv_tabix LIKE sy-tabix
+       , ls_adrc TYPE adrc
+       , lt_lfa1 TYPE vmds_lfa1_t
+       , ls_lfa1 TYPE lfa1
+       , lv_inn TYPE paval
+       , lv_kpp TYPE paval
+       , lv_manager TYPE paval
+       , lv_accountant TYPE paval
+       , ls_lifnr TYPE lifnr_rang
+       , lt_lifnr TYPE lifre_ran_itab
+       , lt_matnr TYPE fre_matnr_rang_tty
+       , ls_matnr TYPE matnr_rang
+       , lt_mara TYPE lty_t_mara
+       , ls_mara TYPE lty_s_mara
+       , lt_product TYPE lty_t_product
+       , lt_taxrate TYPE lty_t_taxrate
+       , lr_meins TYPE RANGE OF meins
+       , ls_meins LIKE LINE OF lr_meins
+       , lt_t006a TYPE lty_t_t006a
+       , lt_mwdat TYPE TABLE OF rtax1u15
+       , ls_mwdat TYPE rtax1u15
+       , ls_taxrate TYPE lty_s_taxrate
+       , ls_t006a TYPE lty_s_t006a
+       , lv_addrtextg TYPE zaddrtext
+       , lv_addrtext TYPE zaddrtext
+       , lv_vproc TYPE i
+       , lv_error_print TYPE xfeld.
+
+  FIELD-SYMBOLS : <wa_item> TYPE j_3rf_it_inv.
+
+  DATA : ls_header TYPE j_3rf_hd_inv
+       , lt_item   TYPE j_3rf_tinv
+       .
+
+  " Оставляем документы, выбранные пользователем
+  ls_belnr-sign = 'I'.
+  ls_belnr-option = 'EQ'.
+  LOOP AT gt_data INTO wa_data WHERE to_print = 'X'.
+    ls_belnr-low = wa_data-belnr.
+    APPEND ls_belnr TO lt_belnr.
+  ENDLOOP.
+
+  CHECK lt_belnr IS NOT INITIAL.
+
+  PERFORM select_bkpf USING lt_belnr
+                   CHANGING lt_bkpf.
+
+  LOOP AT lt_bkpf ASSIGNING <wa_bkpf>.
+    MOVE-CORRESPONDING <wa_bkpf> TO wa_invoice.
+    APPEND wa_invoice TO lt_invoice.
+  ENDLOOP.
+
+  PERFORM select_bseg USING lt_belnr
+                   CHANGING lt_bseg.
+
+*            Общие для всех документов данные               *
+*-----------------------------------------------------------*
+  "  Адрес отправителя
+  PERFORM select_adrc CHANGING ls_adrc.
+  "  ИНН, КПП
+  PERFORM select_inn_kpp CHANGING lv_inn
+                                  lv_kpp.
+  " Подпись руководителя и главного бухгалтера
+  PERFORM select_signatures CHANGING lv_manager
+                                     lv_accountant.
+*-----------------------------------------------------------*
+
+  ls_matnr = 'IEQ'.
+  ls_lifnr = 'IEQ'.
+  ls_meins = 'IEQ'.
+
+  SORT lt_bseg BY belnr buzei.
+  SORT lt_invoice STABLE BY belnr.
+
+  LOOP AT lt_bseg ASSIGNING <wa_bseg>.
+
+    READ TABLE lt_invoice ASSIGNING <wa_invoice>
+                           WITH KEY belnr = <wa_bseg>-belnr
+                           BINARY SEARCH.
+    CHECK sy-subrc = 0.
+
+    " убираем лишние нули
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_OUTPUT'
+      EXPORTING
+        input  = <wa_bseg>-hkont
+      IMPORTING
+        output = <wa_bseg>-hkont.
+    " Товар
+    IF <wa_bseg>-hkont CP lc_matnr.     "'4*'
+      ls_matnr-low = <wa_bseg>-matnr.
+      APPEND ls_matnr TO lt_matnr.
+      ls_meins-low = <wa_bseg>-meins.
+      APPEND ls_meins TO lr_meins.
+
+      IF <wa_invoice>-matnr IS INITIAL.
+        <wa_invoice>-matnr = <wa_bseg>-matnr.
+      ENDIF.
+    ENDIF.
+
+    IF <wa_bseg>-hkont CP lc_lifnr.     "'60*'
+
+      ls_lifnr-low =  <wa_bseg>-lifnr.
+      APPEND ls_lifnr TO lt_lifnr.
+
+      IF <wa_invoice>-lifnr IS INITIAL.
+        <wa_invoice>-lifnr = <wa_bseg>-lifnr.
+      ENDIF.
+    ENDIF.
+
+    IF <wa_bseg>-hkont CP lc_mwskz.     "'41*'
+      IF <wa_invoice>-mwskz IS INITIAL.
+        <wa_invoice>-mwskz = <wa_bseg>-mwskz.
+      ENDIF.
+    ENDIF.
+
+  ENDLOOP.
+
+*            Данные отдельных документов                    *
+*-----------------------------------------------------------*
+  "  Адрес и имя получателя
+  PERFORM select_lfa1 CHANGING lt_lifnr
+                                lt_lfa1.
+
+  LOOP AT lt_invoice ASSIGNING <wa_invoice>.
+    READ TABLE lt_lfa1 INTO ls_lfa1 WITH TABLE KEY mandt = sy-mandt
+                                                   lifnr = <wa_invoice>-lifnr.
+    IF sy-subrc = 0.
+      MOVE-CORRESPONDING ls_lfa1 TO <wa_invoice> .
+      <wa_invoice>-r_name1 = ls_lfa1-name1.
+      <wa_invoice>-r_name2 = ls_lfa1-name2.
+    ENDIF.
+  ENDLOOP.
+
+  " 16 Ставка налога
+  SELECT t007v~aland t007v~mwskz t007v~kbetr
+    FROM t007v
+    INTO CORRESPONDING FIELDS OF TABLE lt_taxrate
+    FOR ALL ENTRIES IN lt_invoice
+    WHERE t007v~aland = lt_invoice-land1
+      AND t007v~mwskz = lt_invoice-mwskz
+      AND t007v~kschl = lc_kschl.
+
+  SORT lr_meins BY low.
+  DELETE ADJACENT DUPLICATES FROM lr_meins COMPARING low.
+
+  IF lr_meins IS NOT INITIAL.
+    SELECT DISTINCT t006a~msehi t006a~mseh6 AS mseh3
+      FROM t006a
+      INTO CORRESPONDING FIELDS OF TABLE lt_t006a
+      WHERE t006a~spras = 'RU'
+        AND t006a~msehi IN lr_meins.
+  ENDIF.
+
+  SORT lt_matnr BY low.
+  DELETE ADJACENT DUPLICATES FROM lt_matnr COMPARING low.
+
+  " Наименование страны получателя и отправителя
+  IF lt_matnr IS NOT INITIAL.
+    SELECT DISTINCT maw1~matnr t005t~landx mara~zz_fullname_txt t005~intcn3
+      INTO CORRESPONDING FIELDS OF TABLE lt_mara
+      FROM mara
+      JOIN maw1 ON maw1~matnr = mara~matnr
+      LEFT JOIN t005  ON t005~land1 = maw1~wherl
+      LEFT JOIN t005t ON t005t~land1 = maw1~wherl
+                AND t005t~spras = 'R'
+      WHERE mara~matnr IN lt_matnr.
+  ENDIF.
+
+
+  SORT lt_bseg BY belnr buzei.
+  LOOP AT lt_invoice ASSIGNING <wa_invoice>.
+
+    CLEAR ls_header.
+    CLEAR lt_item.
+
+    MOVE-CORRESPONDING ls_adrc TO <wa_invoice>.
+    <wa_invoice>-s_inn = lv_inn.
+    <wa_invoice>-s_kpp = lv_kpp.
+    <wa_invoice>-manager = lv_manager.
+    <wa_invoice>-accountant = lv_accountant.
+
+    READ TABLE lt_taxrate INTO ls_taxrate
+                WITH TABLE KEY aland = <wa_invoice>-land1
+                               mwskz = <wa_invoice>-mwskz.
+    IF sy-subrc = 0.
+      <wa_invoice>-kbetr = ls_taxrate-kbetr.
+    ENDIF.
+
+    READ TABLE lt_bseg
+    TRANSPORTING NO FIELDS
+    WITH KEY belnr = <wa_invoice>-belnr
+    BINARY SEARCH.
+    lv_tabix = sy-tabix.
+    LOOP AT lt_bseg ASSIGNING <wa_bseg> FROM lv_tabix.
+      " выход из цикла при переходе на следующий номер документа
+      IF <wa_bseg>-belnr NE <wa_invoice>-belnr.
+        EXIT.
+      ENDIF.
+      " Товар
+      IF <wa_bseg>-hkont CP lc_matnr. "'4*'
+
+        APPEND INITIAL LINE TO lt_product ASSIGNING <wa_product>.
+        MOVE-CORRESPONDING <wa_bseg> TO <wa_product>.
+
+        READ TABLE lt_mara INTO ls_mara WITH TABLE KEY matnr = <wa_bseg>-matnr.
+        IF sy-subrc = 0.
+          <wa_invoice>-landx = ls_mara-landx.
+          MOVE-CORRESPONDING ls_mara TO <wa_product>.
+        ENDIF.
+
+        READ TABLE lt_t006a INTO ls_t006a WITH TABLE KEY msehi = <wa_product>-meins.
+        IF sy-subrc = 0.
+          <wa_product>-mseh3 = ls_t006a-mseh3.
+        ENDIF.
+        "18 Cтавка налога
+        <wa_product>-kbetr = <wa_invoice>-kbetr.
+
+        "15 Цена за единицу товара
+        IF <wa_product>-menge <> 0.
+          <wa_product>-price = <wa_product>-dmbtr / <wa_product>-menge.
+        ENDIF.
+
+        "19 Сумма налога
+        CLEAR lt_mwdat.
+        CALL FUNCTION 'CALCULATE_TAX_FROM_NET_AMOUNT'
+          EXPORTING
+            i_bukrs           = p_bukrs
+            i_mwskz           = <wa_invoice>-mwskz
+            i_waers           = <wa_invoice>-waers
+            i_wrbtr           = <wa_bseg>-wrbtr
+          TABLES
+            t_mwdat           = lt_mwdat
+          EXCEPTIONS
+            bukrs_not_found   = 1
+            country_not_found = 2
+            mwskz_not_defined = 3
+            mwskz_not_valid   = 4
+            ktosl_not_found   = 5
+            kalsm_not_found   = 6
+            parameter_error   = 7
+            knumh_not_found   = 8
+            kschl_not_found   = 9
+            unknown_error     = 10
+            account_not_found = 11
+            txjcd_not_valid   = 12
+            OTHERS            = 13.
+        IF sy-subrc <> 0.
+*         MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+*                    WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+        ENDIF.
+
+        LOOP AT lt_mwdat INTO ls_mwdat WHERE kschl = lc_kschl.
+          ADD ls_mwdat-wmwst TO <wa_product>-wmwst.
+        ENDLOOP.
+
+        "20 Cтоимость товаров с налогом  16+19
+        <wa_product>-swtax = <wa_product>-dmbtr + <wa_product>-wmwst.
+
+        " заполняем структуру для вывода
+        CLEAR lv_vproc.
+        APPEND INITIAL LINE TO lt_item ASSIGNING <wa_item>.
+        <wa_item>-matnm = <wa_product>-zz_fullname_txt.
+        <wa_item>-ecode = <wa_product>-mseh3.
+        <wa_item>-mseh3 = <wa_product>-meins.
+        <wa_item>-fkimg = <wa_product>-menge.
+        <wa_item>-price = <wa_product>-price.
+        <wa_item>-smnet = <wa_product>-dmbtr.
+        lv_vproc = <wa_product>-kbetr / 10.
+        <wa_item>-vproc = lv_vproc.
+        CONDENSE <wa_item>-vproc.
+        <wa_item>-smvat = <wa_product>-wmwst.
+        <wa_item>-total = <wa_product>-swtax.
+        <wa_item>-intcn3 = <wa_product>-intcn3.
+        <wa_item>-alanx = <wa_product>-landx.
+        <wa_item>-exdaa = <wa_product>-sgtxt.
+
+        " суммируем в заголовок
+        ADD <wa_product>-dmbtr TO ls_header-smnet.
+        ADD <wa_product>-wmwst TO ls_header-smvat.
+        ADD <wa_product>-swtax TO ls_header-smtot.
+      ENDIF.
+
+    ENDLOOP.
+
+    " заполняем данные заголовка
+    ls_header-ext_orig  = <wa_invoice>-belnr.
+    ls_header-fkdat     = <wa_invoice>-bldat.
+    ls_header-name1_co  = ls_header-full_name = <wa_invoice>-name1.
+    ls_header-pcode1_co = ls_header-pcode1    = <wa_invoice>-post_code1.
+    ls_header-landt_co   = ls_header-land      = <wa_invoice>-landx.
+    ls_header-city1_co  = ls_header-city1     = <wa_invoice>-city1.
+    ls_header-street_co = ls_header-street    = <wa_invoice>-street.
+    ls_header-stceg     = <wa_invoice>-s_inn.
+    ls_header-stceg_1   = <wa_invoice>-s_kpp.
+    ls_header-name1_ag  = <wa_invoice>-r_name1.
+    ls_header-name2_ag  = <wa_invoice>-r_name2.
+    ls_header-dnam1     = <wa_invoice>-manager.
+    ls_header-dnam2     = <wa_invoice>-accountant.
+
+    CLEAR : lv_addrtextg, lv_addrtext.
+    CONCATENATE <wa_invoice>-r_name1 <wa_invoice>-r_name2 INTO lv_addrtextg SEPARATED BY space.
+    lv_addrtext = <wa_invoice>-pstlz.
+    _add_field   lv_addrtext  <wa_invoice>-landx.
+    _add_field   lv_addrtext  <wa_invoice>-ort01.
+    _add_field   lv_addrtext  <wa_invoice>-stras.
+    _add_field   lv_addrtextg lv_addrtext.
+
+    ls_header-addrtextg = lv_addrtextg.
+    ls_header-addrtext  = lv_addrtext.
+    ls_header-stceg_ag  = <wa_invoice>-stcd1.
+    ls_header-stceg1_ag = <wa_invoice>-stcd3.
+
+    ls_header-curtxt = 'Российский рубль'.
+    ls_header-waerc  = '643'.
+
+    PERFORM print_pdf_3rvinvoice USING ls_header
+                                       lt_item
+                              CHANGING lv_error_print.
+    IF lv_error_print = abap_true.
+      EXIT.
+    ENDIF.
+
+  ENDLOOP.
+
+
+ENDFORM.                    "create_invoice
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_BKPF
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      <--P_LT_INVOICE  text
+*----------------------------------------------------------------------*
+FORM select_bkpf
+  USING
+    it_belnr TYPE rng_belnr_tt
+  CHANGING
+    ct_bkpf TYPE fagl_t_bkpf.
+
+  SELECT bkpf~bukrs bkpf~belnr bkpf~gjahr bkpf~bldat bkpf~waers
+  FROM bkpf
+  INTO CORRESPONDING FIELDS OF TABLE ct_bkpf
+  WHERE bkpf~bukrs = p_bukrs
+    AND bkpf~belnr IN it_belnr
+    AND bkpf~gjahr = p_gjahr.
+
+ENDFORM.                    " SELECT_BKPF
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_BSEG
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM select_bseg
+  USING
+    it_belnr TYPE rng_belnr_tt
+  CHANGING
+    ct_bseg TYPE bseg_t.
+
+  SELECT bseg~bukrs bseg~belnr bseg~gjahr bseg~buzei
+         bseg~mwskz bseg~dmbtr bseg~wrbtr bseg~sgtxt
+         bseg~hkont bseg~lifnr
+         bseg~matnr bseg~meins bseg~menge
+    FROM bseg
+    INTO CORRESPONDING FIELDS OF TABLE ct_bseg
+    WHERE bseg~bukrs = p_bukrs
+      AND bseg~belnr IN it_belnr
+      AND bseg~gjahr = p_gjahr.
+  SORT ct_bseg BY bukrs belnr gjahr buzei.
+
+ENDFORM.                    " SELECT_BSEG
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_ADRC
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM select_adrc
+  CHANGING
+    cs_adrc  TYPE adrc.
+
+  DATA : lv_adrnr TYPE t001-adrnr
+       .
+
+  SELECT SINGLE t001~adrnr
+    FROM t001
+    INTO lv_adrnr
+    WHERE t001~bukrs = p_bukrs.
+
+  CHECK sy-subrc = 0.
+
+  SELECT SINGLE *
+    INTO cs_adrc
+    FROM adrc
+    WHERE adrc~addrnumber = lv_adrnr.
+
+ENDFORM.                    " SELECT_ADRC
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_INN_KPP
+*&---------------------------------------------------------------------*
+*       ИНН, КПП
+*----------------------------------------------------------------------*
+FORM select_inn_kpp
+  CHANGING
+    cv_inn TYPE paval
+    cv_kpp TYPE paval.
+
+  CONSTANTS : lc_inn TYPE paval VALUE 'SAPR01'
+            , lc_kpp TYPE paval VALUE 'SAPR10'
+            .
+  " ИНН
+  SELECT SINGLE t001z~paval
+    FROM t001z
+    INTO cv_inn
+    WHERE t001z~bukrs = p_bukrs
+      AND t001z~party = lc_inn.
+
+  " КПП
+  SELECT SINGLE t001z~paval
+    FROM t001z
+    INTO cv_kpp
+    WHERE t001z~bukrs = p_bukrs
+      AND t001z~party = lc_kpp.
+
+ENDFORM.                    " SELECT_INN_KPP
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_LFA1
+*&---------------------------------------------------------------------*
+*       Адрес и имя получателя
+*----------------------------------------------------------------------*
+FORM select_lfa1
+  CHANGING
+    ct_lifnr TYPE lifre_ran_itab
+    ct_lfa1 TYPE vmds_lfa1_t.
+
+  SORT ct_lifnr BY low.
+  DELETE ADJACENT DUPLICATES FROM ct_lifnr COMPARING low.
+
+  IF ct_lifnr IS NOT INITIAL.
+    SELECT lfa1~mandt lfa1~lifnr lfa1~land1
+           lfa1~name1 lfa1~name2 lfa1~ort01 lfa1~pstlz lfa1~stras
+           lfa1~stcd1 lfa1~stcd3
+      FROM lfa1
+      INTO CORRESPONDING FIELDS OF TABLE ct_lfa1
+      WHERE lfa1~lifnr IN ct_lifnr.
+  ENDIF.
+
+ENDFORM.                    " SELECT_LFA1
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_SIGNATURES
+*&---------------------------------------------------------------------*
+*       Подпись руководителя и главного бухгалтера
+*----------------------------------------------------------------------*
+FORM select_signatures
+  CHANGING
+    cv_manager    TYPE paval
+    cv_accountant TYPE paval.
+
+  CONSTANTS : lc_manager TYPE party VALUE 'SAPR13'
+            , lc_accountant TYPE party VALUE 'SAPR15'
+            .
+
+  SELECT SINGLE t001z~paval
+    FROM t001z
+    INTO cv_manager
+    WHERE t001z~bukrs = p_bukrs
+      AND t001z~party = lc_manager.
+
+  SELECT SINGLE t001z~paval
+    FROM t001z
+    INTO cv_accountant
+    WHERE t001z~bukrs = p_bukrs
+      AND t001z~party = lc_accountant.
+
+ENDFORM.                    " SELECT_SIGNATURES
+*&---------------------------------------------------------------------*
+*&      Form  PRINT_PDF_3RVINVOICE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM print_pdf_3rvinvoice
+  USING
+    is_header TYPE j_3rf_hd_inv
+    it_item   TYPE j_3rf_tinv
+  CHANGING
+    cv_error_print TYPE xfeld.
+
+  DATA:
+      lv_fm_name         TYPE rs38l_fnam,
+      ls_fp_docparams    TYPE sfpdocparams,
+      ls_fp_outputparams TYPE sfpoutputparams,
+      lo_ref_cx_root     TYPE REF TO cx_root,
+      lv_err_text        TYPE string,
+      lt_txt             TYPE j_3rf_txt.
+
+  CONSTANTS:
+    lc_fpname TYPE fpname VALUE 'ZSFP_3RVINVOICE_BACK2NAO'.
+
+  TRY .
+      CALL FUNCTION 'FP_FUNCTION_MODULE_NAME'
+        EXPORTING
+          i_name     = lc_fpname
+        IMPORTING
+          e_funcname = lv_fm_name.
+
+    CATCH cx_root INTO lo_ref_cx_root.
+      lv_err_text = lo_ref_cx_root->get_text( ).
+      cv_error_print = abap_true.
+      MESSAGE lv_err_text TYPE 'I'.
+  ENDTRY.
+
+  ls_fp_outputparams-connection = 'ADS'.
+  ls_fp_outputparams-reqnew     = 'X'.
+*  ls_fp_outputparams-dest       = ls_print_data-ldest.
+*  ls_fp_outputparams-reqnew     = 'X'.
+  ls_fp_outputparams-reqnew     = abap_true.
+  ls_fp_outputparams-reqfinal   = abap_true.
+*  ls_fp_outputparams-reqdel     = 'X'.
+*  ls_fp_outputparams-senddate   = sy-datum.
+*  ls_fp_outputparams-sendtime   = sy-uzeit.
+*  ls_fp_outputparams-nodialog   = is_print_data-no_dialog.
+*  ls_fp_outputparams-schedule   = is_nast-tdschedule.
+*  ls_fp_outputparams-copies     = is_nast-anzal.
+*  ls_fp_outputparams-dataset    = is_nast-dsnam.
+*  ls_fp_outputparams-suffix1    = is_nast-dsuf1.
+*  ls_fp_outputparams-suffix2    = is_nast-dsuf2.
+*  ls_fp_outputparams-cover      = is_nast-tdocover.
+*  ls_fp_outputparams-receiver   = is_nast-tdreceiver.
+*  ls_fp_outputparams-authority  = is_nast-tdautority.
+*  ls_fp_outputparams-arcmode    = is_nast-tdarmod.
+  ls_fp_outputparams-pdftagged  = 'X'.
+
+  CALL FUNCTION 'FP_JOB_OPEN'
+    CHANGING
+      ie_outputparams = ls_fp_outputparams
+    EXCEPTIONS
+      cancel          = 1
+      usage_error     = 2
+      system_error    = 3
+      internal_error  = 4
+      OTHERS          = 5.
+
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    cv_error_print = abap_true.
+    RETURN.
+  ENDIF.
+  ls_fp_docparams-langu = 'EN'.
+  CALL FUNCTION lv_fm_name
+    EXPORTING
+      /1bcdwb/docparams = ls_fp_docparams
+      is_vbdkr          = is_header
+      is_text           = lt_txt
+      is_vbdpr          = it_item
+    EXCEPTIONS
+      usage_error       = 1
+      system_error      = 2
+      internal_error    = 3.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    cv_error_print = abap_true.
+    RETURN.
+  ENDIF.
+
+  CALL FUNCTION 'FP_JOB_CLOSE'
+*    IMPORTING
+*      e_result       = gs_result
+    EXCEPTIONS
+      usage_error    = 1
+      system_error   = 2
+      internal_error = 3
+      OTHERS         = 4.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    cv_error_print = abap_true.
+    RETURN.
+  ENDIF.
+
+ENDFORM.                    " PRINT_PDF_3RVINVOICE
